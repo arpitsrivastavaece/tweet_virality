@@ -1,0 +1,326 @@
+---
+title: "Tweets Virality"
+author: "Xinyu Jiang, Siddharth Rawat, Arpit Srivastava, and Qian Wang"
+output: 
+  word_document
+---
+
+<br/>
+<br/>
+
+### Data and package loading
+
+```{r, echo=T}
+rm(list=ls())
+
+library(tidyverse)
+library(caret)
+library(broom)
+library(olsrr)
+
+Tweets <- read.csv("C:\\Users\\arpit\\OneDrive\\Desktop\\Final Project\\For R 3.csv")
+
+```
+<br/>
+
+<br/>
+
+### Data importing 
+
+The following variables were extracted from Tweet data previously described in the Jupyter notebook. In breif, the log10 transformed number of retweets was identified as response variable, while length of the tweet, number of hashtags, number of handles, log10-transformed number of average likes per user (calculated based on the tweets one month earlier), absolute sentiment score of the tweet, number of followers of the user were included in the data as potential continuous predicting variables. Also, a binary varialbe was included in the dataset to represent whether the user is a verified user. Details for data extraction, distributions, and transformations can be found in the same notebook.
+
+```{r, echo = TRUE}
+Tweets_Sub <- 
+  Tweets %>% 
+  select(retweets_tansformed,
+         tweet_length, 
+         hashtags,
+         handles,
+         sentiment_absolute,
+         avglikes_tansformed,
+         followers,
+         verification_status) %>%
+  mutate(verification_status=factor(verification_status,levels = c(0,1)))
+head(Tweets_Sub, 5)
+
+```
+
+<br/>
+
+<br/>
+
+### Data spliting: training vs. testing
+
+The full dataset was then splitted into training and testing, which comprised of 80% and 20% of the observations, respectively.  
+
+```{r, echo = TRUE}
+set.seed(2020)
+Tweets_Train_Index <- createDataPartition(Tweets_Sub$retweets_tansformed,
+                                          p = .8, 
+                                          list = FALSE, 
+                                          times = 1)
+
+Tweets_Train <- Tweets_Sub[ Tweets_Train_Index,]
+Tweets_Test  <- Tweets_Sub[-Tweets_Train_Index,]
+```
+
+<br/>
+
+The dimentions for training dataset is `r nrow(Tweets_Train)` rows with `r ncol(Tweets_Train)` columns, while the dimention for testing data is `r nrow(Tweets_Test)` rows with `r ncol(Tweets_Test)` columns.
+
+<br/>
+
+<br/>
+
+### Multiple linear regression model: construction and evaluation 
+
+<br/>
+
+#### Base model
+
+The following code construct a linear regression model using all of the listed variables. 
+
+```{r, echo = TRUE}
+Model_Base <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       tweet_length+ 
+       hashtags+
+       handles+
+       avglikes_tansformed+
+       followers+
+       sentiment_absolute+
+       verification_status,
+     data=.) 
+summary(Model_Base)
+```
+
+<br/>
+
+As we can see, all the p-values are significant because the dataset is large enough. So, due to the size of our dataset, alpha = 0.01 will be a better threshold. In this case, verification status should be removed.
+
+<br/>
+
+#### Model with Interaction term
+ 
+Average likes and number of followers have a correlation of 0.64, which is very high. For that an interaction term as been included in the model
+
+
+```{r, echo = TRUE}
+Model_inter <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       tweet_length+ 
+       hashtags+
+       handles+
+       sentiment_absolute+
+       avglikes_tansformed*(followers),
+     data=.) 
+summary(Model_inter)   
+```
+
+
+
+#### Explore quadratic effect
+
+There might be undiscovered quadratic effects in the data, residual plots are conducted below to examine this effect.
+
+```{r, echo = TRUE}
+m1 <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       tweet_length,
+     data=.) 
+plot(m1, which=1)
+```
+
+<br/>
+
+```{r, echo = TRUE}
+m2 <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       hashtags,
+     data=.) 
+ plot(m2, which=1)
+```
+
+<br/>
+
+```{r, echo = TRUE}
+m3 <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       avglikes_tansformed,
+     data=.) 
+plot(m3, which=1)
+```
+
+<br/>
+
+```{r, echo = TRUE}
+m4 <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       followers,
+     data=.) 
+plot(m4, which=1)
+```
+
+<br/>
+
+As we can see in the above residual plots, there is an obvious quadratic effect between followers and the target variable. Next, we are going to build a model to include this quadratic term.
+
+<br/>
+
+#### Quadratic model 
+
+```{r, echo = TRUE}
+Model_Full <- 
+  Tweets_Train%>% 
+  lm(retweets_tansformed ~ 
+       tweet_length+ 
+       hashtags+
+       handles+
+       avglikes_tansformed*(followers+I(followers^2))+
+       sentiment_absolute,
+     data=.) 
+summary(Model_Full)  
+```
+
+<br/>
+
+R output shows an adjusted r-squared value of `r round(summary(Model_Quadratic)$adj.r.squared,3)`, which is slightly higher than the base model.
+
+<br/>
+
+#### Model comparison
+
+The anova() function from R can be used to compare the model fitness between two linear regression models. The output of the model comparison between base and quadratic models is presented below. 
+
+```{r, echo = TRUE}
+anova(Model_Base, Model_inter, test="Chisq") 
+```
+
+<br/>
+
+This function compares the quadratic model with the base model using Chi-square test. In short, it tests whether the reduction in residual sum of squares (RSS) is statistically signficant under a Chi-square distribution, with df equals to the number of variables dropped from the full model. 
+
+The result shows that the RSS decreased with one degree of freedom increase.
+
+<br/>
+
+
+
+#### Model comparison
+
+```{r, echo = TRUE}
+anova(Model_inter, Model_Full, test="Chisq") 
+```
+
+<br/>
+
+The full model with both interaction and quadratic term has a lower RSS than the quadratic one. It outperforms the other two model. let's take a look at the model diagnotic plots.
+
+
+#### Model diagnositic
+
+The following code generates model diagnositic plots for 1) homogeneity of variance and 2) residual normality. 
+
+```{r, echo = TRUE, fig.height=4, fig.width=8}
+plot(Model_Full, which=1)
+```
+
+<br/>
+
+The first plot showed that the residuals were generally randomly scattered around 0, with a slight pattern of elevation towards the right where the fitted values are high. Overall, it looks fine.
+
+<br/>
+
+```{r, echo = TRUE, fig.height=4, fig.width=8}
+plot(Model_Full, which=2)
+```
+
+<br/>
+
+The quantile-quantile plot showed that the model residuals are quite normal. 
+
+Building upon this linear regression model, we can use train() function from "caret" packege to incorporate cross-validation in the training process, and eventually evaluate the model performance with the testing data. 
+
+<br/>
+<br/>
+
+### Applying multiple linear regression model with 10-fold cross-validation
+
+<br/>
+
+#### Constructing the 10-fold cross-validation model
+
+```{r, echo = TRUE}
+ctrl<-trainControl(method = "cv",number = 10)
+
+Lr_Cv<-train(retweets_tansformed ~ 
+       tweet_length+ 
+       hashtags+
+       handles+
+       avglikes_tansformed*(followers+I(followers^2))+
+       sentiment_absolute,
+             data = Tweets_Train, method = "lm", 
+             trControl = ctrl, metric= "Rsquared")
+summary(Lr_Cv)
+```
+
+<br/>
+
+#### Predicting on testing data
+
+```{r, echo = TRUE}
+Pred_Test<-predict(Lr_Cv,Tweets_Test[,-1])
+```
+
+<br/>
+
+
+#### Evaluate the prediction using testing data 
+
+```{r, echo = TRUE}
+Pred_comparison <-data.frame(obs = Tweets_Test$retweets_tansformed, pred = Pred_Test)
+defaultSummary(Pred_comparison)[c(1,3)]
+```
+
+<br/>
+
+The RMSE on the test dataset is .560 with a MAE equals to .444. We are going to compare these with train dataset to test if there is overfitting or underfitting in the model.
+
+<br/>
+
+#### Examine overfitting
+
+```{r, echo = TRUE}
+Pred_Train<-predict(Lr_Cv,Tweets_Train[,-1])
+Obs_comparison <- data.frame(obs = Tweets_Train$retweets_tansformed, pred = Pred_Train)
+defaultSummary(Obs_comparison)[c(1,3)]
+```
+<br/>
+
+The RMSE on the train dataset is .551 with a MAE equals to .428. Both two numbers are consistent with those on test dataset, which indicates there is no obvious overfitting or underfitting.
+
+<br/>
+<br/>
+
+### Conclusion
+
+```{r, echo = TRUE}
+summary(Lr_Cv)
+```
+
+<br/>
+
+Based on the model summary above, tweet length, averagelikes transformed, number of followers, and the interaction effect betweet tweet lenght and hashtags have positive effect on retweets. Among this, the effect of average likes transformed has the largest effect based on the coefficient. 
+
+
+
+
+
+
+
